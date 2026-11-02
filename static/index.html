@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Transcript Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --chat-bg: #161b22;
+      --card-bg: #21262d;
+      --border: #30363d;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --primary-subtle: rgba(37, 99, 235, 0.15);
+      --text: #f0f6fc;
+      --text-muted: #8b949e;
+      --text-dim: #6e7681;
+      --user-bubble: #1f6feb;
+      --bot-bubble: #21262d;
+      --success: #238636;
+      --danger: #da3633;
+      --radius: 12px;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top App Header */
+    header {
+      background: rgba(22, 27, 34, 0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-icon {
+      width: 34px;
+      height: 34px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .brand-text h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .brand-text span {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: block;
+    }
+
+    /* Identity / Security Selector in Header */
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .identity-selector-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+    }
+    .identity-selector-wrap label {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .identity-select {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 12px;
+      font-family: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      outline: none;
+    }
+    .identity-select option {
+      background: var(--card-bg);
+      color: var(--text);
+    }
+    .status-badge {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .badge-green { background: rgba(35, 134, 54, 0.2); color: #3fb950; border: 1px solid rgba(35, 134, 54, 0.4); }
+    .badge-red { background: rgba(218, 54, 51, 0.2); color: #f85149; border: 1px solid rgba(218, 54, 51, 0.4); }
+
+    /* Main Chat Container */
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      max-width: 900px;
+      width: 100%;
+      margin: 0 auto;
+      height: calc(100vh - 60px);
+      position: relative;
+    }
+
+    /* Chat Messages Scrollable Area */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      scroll-behavior: smooth;
+    }
+
+    /* Welcome / Starter View */
+    .welcome-card {
+      text-align: center;
+      margin: auto;
+      max-width: 540px;
+      padding: 40px 20px;
+    }
+    .welcome-icon {
+      width: 56px;
+      height: 56px;
+      background: var(--primary-subtle);
+      border: 1px solid rgba(37, 99, 235, 0.3);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+      font-size: 26px;
+    }
+    .welcome-card h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .welcome-card p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+    .starter-prompts {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      text-align: left;
+    }
+    .prompt-chip {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #c9d1d9;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .prompt-chip:hover {
+      background: #30363d;
+      border-color: var(--primary);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    /* Message Bubbles */
+    .message-row {
+      display: flex;
+      gap: 12px;
+      width: 100%;
+    }
+    .message-row.user {
+      justify-content: flex-end;
+    }
+    .message-row.bot {
+      justify-content: flex-start;
+    }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .avatar.bot {
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: white;
+    }
+    .avatar.user {
+      background: #30363d;
+      color: #c9d1d9;
+    }
+
+    .bubble {
+      max-width: 82%;
+      padding: 14px 18px;
+      border-radius: 14px;
+      font-size: 14px;
+      line-height: 1.6;
+      word-wrap: break-word;
+    }
+    .message-row.user .bubble {
+      background: var(--user-bubble);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .message-row.bot .bubble {
+      background: var(--bot-bubble);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+      color: #e6edf3;
+    }
+
+    /* Markdown styling inside assistant response */
+    .bubble h3, .bubble h4 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-top: 12px;
+      margin-bottom: 6px;
+      color: #93c5fd;
+    }
+    .bubble h3:first-child, .bubble h4:first-child {
+      margin-top: 0;
+    }
+    .bubble p {
+      margin-bottom: 10px;
+    }
+    .bubble p:last-child {
+      margin-bottom: 0;
+    }
+    .bubble ul {
+      margin-left: 20px;
+      margin-bottom: 10px;
+    }
+    .bubble li {
+      margin-bottom: 5px;
+    }
+    .bubble blockquote {
+      border-left: 3px solid var(--primary);
+      padding-left: 12px;
+      margin: 8px 0;
+      color: #c9d1d9;
+      font-style: italic;
+    }
+    .bubble code {
+      background: rgba(110, 118, 129, 0.2);
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    /* Collapsible Citations Drawer */
+    .citations-drawer {
+      margin-top: 14px;
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+    }
+    .citations-toggle {
+      background: transparent;
+      border: none;
+      color: #58a6ff;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0;
+    }
+    .citations-toggle:hover {
+      text-decoration: underline;
+    }
+    .citations-content {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .citations-content.open {
+      display: flex;
+    }
+    .citation-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+    }
+    .citation-item-header {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      font-size: 11px;
+    }
+    .citation-item-title {
+      color: #79c0ff;
+      font-weight: 500;
+    }
+    .citation-item-text {
+      color: #8b949e;
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: pre-wrap;
+      line-height: 1.4;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    /* Loading Typing Dots */
+    .typing-indicator {
+      display: flex;
+      gap: 5px;
+      padding: 6px 4px;
+    }
+    .typing-dot {
+      width: 7px;
+      height: 7px;
+      background: #8b949e;
+      border-radius: 50%;
+      animation: typing 1.4s infinite;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes typing {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30% { transform: translateY(-5px); opacity: 1; }
+    }
+
+    /* Fixed Input Bar */
+    .chat-input-bar {
+      padding: 16px 20px 20px;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .input-form {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      background: var(--chat-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 8px 12px;
+      transition: border-color 0.2s;
+    }
+    .input-form:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px var(--primary-subtle);
+    }
+    .chat-textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      resize: none;
+      max-height: 140px;
+      min-height: 24px;
+      line-height: 24px;
+    }
+    .send-btn {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .send-btn:hover {
+      background: var(--primary-hover);
+    }
+    .send-btn:disabled {
+      background: #30363d;
+      color: #6e7681;
+      cursor: not-allowed;
+    }
+    .input-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header with Identity & Security Controls -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">💬</div>
+      <div class="brand-text">
+        <h1>Meeting Transcript Assistant</h1>
+        <span>Dialogue-Aware Retrieval with Dynamic ABAC Security</span>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <!-- Dynamic Identity Dropdown -->
+      <div class="identity-selector-wrap">
+        <label for="identity-dropdown">Chatting as:</label>
+        <select id="identity-dropdown" class="identity-select" onchange="onIdentityChanged()">
+          <option value="loading">Loading dynamic users...</option>
+        </select>
+      </div>
+
+      <!-- Security Status Badge -->
+      <div id="security-badge" class="status-badge badge-green">
+        <span>🔒</span> Authorized
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Chatbot View -->
+  <div class="chat-container">
+    <div class="chat-messages" id="messages-container">
+      
+      <!-- Welcome Hero (shown when no messages exist) -->
+      <div class="welcome-card" id="welcome-view">
+        <div class="welcome-icon">🎙️</div>
+        <h2>What would you like to know from the meetings?</h2>
+        <p>
+          Ask questions about decisions, action items, or technical discussions.
+          Responses are grounded exclusively in authorized meeting recordings.
+        </p>
+        <div class="starter-prompts">
+          <div class="prompt-chip" onclick="submitPrompt('What was discussed regarding the license extension and decisions?')">
+            <span>💡</span> What was discussed regarding the license extension and decisions?
+          </div>
+          <div class="prompt-chip" onclick="submitPrompt('What issues or blockers were raised regarding security and pipeline triggers?')">
+            <span>🛡️</span> What issues or blockers were raised regarding security and pipeline triggers?
+          </div>
+          <div class="prompt-chip" onclick="submitPrompt('What was discussed about connecting external APIs to retrieve data?')">
+            <span>🔌</span> What was discussed about connecting external APIs to retrieve data?
+          </div>
+          <div class="prompt-chip" onclick="submitPrompt('How much data needs to be exported and what are the read-only constraints?')">
+            <span>📊</span> How much data needs to be exported and what are the read-only constraints?
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Fixed Bottom Chat Input Bar -->
+    <div class="chat-input-bar">
+      <div class="input-form">
+        <textarea 
+          id="chat-input" 
+          class="chat-textarea" 
+          rows="1" 
+          placeholder="Ask a question about the meeting transcripts..." 
+          onkeydown="handleKeyDown(event)"
+          oninput="autoResize(this)"
+        ></textarea>
+        <button id="send-btn" class="send-btn" onclick="sendMessage()" title="Send Message">
+          <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="input-hint">
+        Press <strong>Enter</strong> to send, <strong>Shift + Enter</strong> for a new line. Access is pre-filtered by ABAC clearance.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let activeUserContext = {
+      user_id: "",
+      role: "member",
+      department: "Engineering"
+    };
+
+    let discoveredParticipants = [];
+
+    // Initialize application and discover dynamic transcript participants
+    async function initChat() {
+      try {
+        const resp = await fetch('/api/v1/transcripts');
+        const data = await resp.json();
+        discoveredParticipants = data.unique_participants || [];
+
+        const dropdown = document.getElementById('identity-dropdown');
+        dropdown.innerHTML = '';
+
+        // Add dynamically discovered participants (Authorized Members)
+        discoveredParticipants.forEach((name, idx) => {
+          const opt = document.createElement('option');
+          opt.value = JSON.stringify({ user_id: name, role: 'member', dept: 'Engineering' });
+          opt.textContent = `👤 ${name} (Member - Authorized)`;
+          if (idx === 0) opt.selected = true;
+          dropdown.appendChild(opt);
+        });
+
+        // Add System Administrator (Superuser)
+        const adminOpt = document.createElement('option');
+        adminOpt.value = JSON.stringify({ user_id: 'sys_admin_user', role: 'admin', dept: 'IT/Security' });
+        adminOpt.textContent = '🛡️ System Administrator (Superuser)';
+        dropdown.appendChild(adminOpt);
+
+        // Add Unauthorized Intern (Non-participant)
+        const internOpt = document.createElement('option');
+        internOpt.value = JSON.stringify({ user_id: 'test_intern_non_participant', role: 'intern', dept: 'Finance' });
+        internOpt.textContent = '🚫 Unauthorized Intern (Access Blocked)';
+        dropdown.appendChild(internOpt);
+
+        // Add External Guest (Untrusted identity)
+        const guestOpt = document.createElement('option');
+        guestOpt.value = JSON.stringify({ user_id: 'external_untrusted_user@guest.com', role: 'intern', dept: 'External' });
+        guestOpt.textContent = '🚫 External Guest (Access Blocked)';
+        dropdown.appendChild(guestOpt);
+
+        onIdentityChanged();
+      } catch (err) {
+        console.error("Failed loading dynamic identities:", err);
+      }
+    }
+
+    function onIdentityChanged() {
+      const dropdown = document.getElementById('identity-dropdown');
+      try {
+        const ctx = JSON.parse(dropdown.value);
+        activeUserContext.user_id = ctx.user_id;
+        activeUserContext.role = ctx.role;
+        activeUserContext.department = ctx.dept;
+
+        const badge = document.getElementById('security-badge');
+        if (ctx.role === 'intern') {
+          badge.className = 'status-badge badge-red';
+          badge.innerHTML = '<span>🚫</span> Restricted Intern';
+        } else if (ctx.role === 'admin') {
+          badge.className = 'status-badge badge-green';
+          badge.innerHTML = '<span>🛡️</span> Superuser Global';
+        } else {
+          badge.className = 'status-badge badge-green';
+          badge.innerHTML = '<span>🔒</span> Authorized Member';
+        }
+      } catch (e) {}
+    }
+
+    function autoResize(el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+      }
+    }
+
+    function submitPrompt(text) {
+      document.getElementById('chat-input').value = text;
+      sendMessage();
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('chat-input');
+      const query = input.value.trim();
+      if (!query) return;
+
+      // Hide welcome card if present
+      const welcome = document.getElementById('welcome-view');
+      if (welcome) welcome.style.display = 'none';
+
+      const messagesContainer = document.getElementById('messages-container');
+      const sendBtn = document.getElementById('send-btn');
+
+      // 1. Append User Message Bubble
+      appendMessage('user', query);
+      input.value = '';
+      input.style.height = 'auto';
+      sendBtn.disabled = true;
+
+      // 2. Append Assistant Typing Indicator Bubble
+      const botMsgId = 'bot-msg-' + Date.now();
+      appendTypingBubble(botMsgId);
+      scrollToBottom();
+
+      try {
+        const resp = await fetch('/api/v1/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: query,
+            top_k: 5,
+            simulate_user_id: activeUserContext.user_id,
+            simulate_role: activeUserContext.role,
+            simulate_department: activeUserContext.department
+          })
+        });
+
+        const data = await resp.json();
+        updateBotMessage(botMsgId, data);
+      } catch (err) {
+        updateBotMessage(botMsgId, {
+          answer: `**Error:** Failed to connect to query engine (${err.message}).`,
+          retrieved_count: 0,
+          citations: []
+        });
+      } finally {
+        sendBtn.disabled = false;
+        scrollToBottom();
+      }
+    }
+
+    function appendMessage(role, text) {
+      const container = document.getElementById('messages-container');
+      const row = document.createElement('div');
+      row.className = `message-row ${role}`;
+
+      if (role === 'user') {
+        row.innerHTML = `
+          <div class="bubble">${escapeHtml(text)}</div>
+          <div class="avatar user">👤</div>
+        `;
+      } else {
+        row.innerHTML = `
+          <div class="avatar bot">🤖</div>
+          <div class="bubble">${formatMarkdown(text)}</div>
+        `;
+      }
+
+      container.appendChild(row);
+      scrollToBottom();
+    }
+
+    function appendTypingBubble(msgId) {
+      const container = document.getElementById('messages-container');
+      const row = document.createElement('div');
+      row.className = 'message-row bot';
+      row.id = msgId;
+      row.innerHTML = `
+        <div class="avatar bot">🤖</div>
+        <div class="bubble">
+          <div class="typing-indicator">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+          </div>
+        </div>
+      `;
+      container.appendChild(row);
+    }
+
+    function updateBotMessage(msgId, data) {
+      const row = document.getElementById(msgId);
+      if (!row) return;
+
+      const bubble = row.querySelector('.bubble');
+      let html = '';
+
+      if (data.retrieved_count === 0) {
+        html = `
+          <p style="color: #f85149;">
+            <strong>🚫 Access Denied by Security Filter:</strong><br/>
+            No meeting records matched your security clearance (<code>${activeUserContext.role.toUpperCase()}</code>) 
+            or meeting participation roster for <code>${escapeHtml(activeUserContext.user_id)}</code>. 
+            Zero unauthorized vector chunks were returned.
+          </p>
+        `;
+      } else {
+        html = formatMarkdown(data.answer);
+
+        // Add Collapsible Citations Drawer
+        if (data.citations && data.citations.length > 0) {
+          const drawerId = 'drawer-' + Date.now();
+          html += `
+            <div class="citations-drawer">
+              <button class="citations-toggle" onclick="toggleDrawer('${drawerId}')">
+                📚 <span>View ${data.citations.length} Grounded Context Excerpts</span> ▼
+              </button>
+              <div class="citations-content" id="${drawerId}">
+          `;
+
+          data.citations.forEach((c, i) => {
+            html += `
+              <div class="citation-item">
+                <div class="citation-item-header">
+                  <span class="citation-item-title">#${i+1} • ${escapeHtml(c.title)}</span>
+                  <span>Time: ${escapeHtml(c.start_timestamp)} - ${escapeHtml(c.end_timestamp)} | Match: ${(c.score * 100).toFixed(1)}%</span>
+                </div>
+                <div style="font-size: 11px; color: #c9d1d9; margin-bottom: 4px;">
+                  <strong>Speakers:</strong> ${escapeHtml(c.speakers.join(', '))}
+                </div>
+                <div class="citation-item-text">${escapeHtml(c.text)}</div>
+              </div>
+            `;
+          });
+
+          html += `
+              </div>
+            </div>
+          `;
+        }
+      }
+
+      bubble.innerHTML = html;
+      scrollToBottom();
+    }
+
+    function toggleDrawer(id) {
+      const drawer = document.getElementById(id);
+      if (drawer) {
+        drawer.classList.toggle('open');
+        scrollToBottom();
+      }
+    }
+
+    function scrollToBottom() {
+      const container = document.getElementById('messages-container');
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    // Lightweight markdown formatter for chat responses
+    function formatMarkdown(text) {
+      if (!text) return '';
+      let escaped = escapeHtml(text);
+
+      // Headers (### Header)
+      escaped = escaped.replace(/^### (.*$)/gim, '<h4>$1</h4>');
+      escaped = escaped.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
+
+      // Bold (**bold**)
+      escaped = escaped.replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>');
+
+      // Italics (*italic*)
+      escaped = escaped.replace(/\*(.*?)\*/gim, '<em>$1</em>');
+
+      // Inline code (`code`)
+      escaped = escaped.replace(/`([^`]+)`/gim, '<code>$1</code>');
+
+      // Blockquotes (> quote)
+      escaped = escaped.replace(/^>\s*(.*$)/gim, '<blockquote>$1</blockquote>');
+
+      // Unordered lists (- item)
+      escaped = escaped.replace(/^\s*-\s+(.*$)/gim, '<li>$1</li>');
+      escaped = escaped.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+
+      // Double newlines to paragraph breaks
+      escaped = escaped.replace(/\n\n/gim, '</p><p>');
+      escaped = escaped.replace(/\n/gim, '<br/>');
+
+      return `<p>${escaped}</p>`;
+    }
+
+    // Initialize on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      initChat();
+    });
+  </script>
+</body>
+</html>

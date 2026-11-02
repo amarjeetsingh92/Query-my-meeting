@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+venv/
+env/
+ENV/
+
+# Qdrant local storage and test databases
+qdrant_db/
+test_qdrant_db/
+
+# Private meeting transcript documents & converted markdown
+sample_transcripts/*.docx
+sample_transcripts/*.doc
+markdown_transcripts/*.md
+!sample_transcripts/.gitkeep
+!markdown_transcripts/.gitkeep
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*.docx
