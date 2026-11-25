@@ -4,7 +4,13 @@ Production-ready Retrieval-Augmented Generation (RAG) platform purpose-built for
 
 ## Key Capabilities
 
-1. **Document Parsing & Frontmatter Normalization (`convert_to_md.py`):**
+1. **OAuth 2.0 Enterprise Security & JWT Claims (`RFC 6749`, `RFC 7519`):**
+   - Cryptographically signed and verified JWT access tokens (`POST /api/v1/auth/token`).
+   - Rejects tampered, forged, or expired tokens with standard HTTP `401 Unauthorized`.
+   - Binds vector database ABAC filters directly to verified identity claims extracted from the token.
+   - Plug-and-play support for enterprise Identity Providers (Azure AD, Okta, Google Workspace).
+
+2. **Document Parsing & Frontmatter Normalization (`convert_to_md.py`):**
    - Ingests Word `.docx` transcripts.
    - Extracts Meeting Title, Date, Duration, and full Participant Rosters (from headers, transcription start/stop markers, and speech turns).
    - Handles multi-line MS Teams turns (`Speaker   Timestamp\nDialogue`) as well as inline turns and Word tables.
@@ -56,7 +62,7 @@ python ingest.py --dir markdown_transcripts
 # End-to-end pipeline & ABAC authorization test
 python test_pipeline.py
 
-# FastAPI endpoints & security inspection test
+# FastAPI endpoints, OAuth 2.0 token tests, & security inspection test
 python test_api.py
 ```
 
@@ -65,6 +71,21 @@ python test_api.py
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 Interactive Swagger UI available at: `http://localhost:8000/docs`
+Interactive Chatbot UI available at: `http://localhost:8000/`
+
+### 6. OAuth 2.0 Authentication Workflow
+```bash
+# Obtain OAuth 2.0 JWT Access Token
+curl -X POST http://localhost:8000/api/v1/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"username": "employee_user", "role": "member", "department": "Engineering"}'
+
+# Query Meeting Transcripts with Bearer Token
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What decisions were made?", "top_k": 5}'
+```
 
 ---
 

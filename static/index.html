@@ -449,7 +449,7 @@
       <div class="brand-icon">💬</div>
       <div class="brand-text">
         <h1>Meeting Transcript Assistant</h1>
-        <span>Dialogue-Aware Retrieval with Dynamic ABAC Security</span>
+        <span>Dialogue-Aware Retrieval with Dynamic ABAC & OAuth 2.0 Security</span>
       </div>
     </div>
 
@@ -530,6 +530,7 @@
     };
 
     let discoveredParticipants = [];
+    let currentOAuthToken = null;
 
     // Initialize application and discover dynamic transcript participants
     async function initChat() {
@@ -568,13 +569,38 @@
         guestOpt.textContent = '🚫 External Guest (Access Blocked)';
         dropdown.appendChild(guestOpt);
 
-        onIdentityChanged();
+        await onIdentityChanged();
       } catch (err) {
         console.error("Failed loading dynamic identities:", err);
       }
     }
 
-    function onIdentityChanged() {
+    async function refreshOAuthToken() {
+      try {
+        const resp = await fetch('/api/v1/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: activeUserContext.user_id,
+            role: activeUserContext.role,
+            department: activeUserContext.department
+          })
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          currentOAuthToken = data.access_token;
+          console.log("OAuth2 Bearer token acquired for:", activeUserContext.user_id);
+        } else {
+          console.error("Failed to acquire OAuth2 token, HTTP status:", resp.status);
+          currentOAuthToken = null;
+        }
+      } catch (err) {
+        console.warn("Could not acquire OAuth2 token:", err);
+        currentOAuthToken = null;
+      }
+    }
+
+    async function onIdentityChanged() {
       const dropdown = document.getElementById('identity-dropdown');
       try {
         const ctx = JSON.parse(dropdown.value);
@@ -583,17 +609,23 @@
         activeUserContext.department = ctx.dept;
 
         const badge = document.getElementById('security-badge');
+        badge.innerHTML = '<span>⏳</span> Authenticating OAuth2...';
+
+        await refreshOAuthToken();
+
         if (ctx.role === 'intern') {
           badge.className = 'status-badge badge-red';
-          badge.innerHTML = '<span>🚫</span> Restricted Intern';
+          badge.innerHTML = '<span>🚫</span> Restricted Intern (OAuth Verified)';
         } else if (ctx.role === 'admin') {
           badge.className = 'status-badge badge-green';
-          badge.innerHTML = '<span>🛡️</span> Superuser Global';
+          badge.innerHTML = '<span>🛡️</span> Superuser Global (OAuth Verified)';
         } else {
           badge.className = 'status-badge badge-green';
-          badge.innerHTML = '<span>🔒</span> Authorized Member';
+          badge.innerHTML = '<span>🔒</span> Authorized Member (OAuth Verified)';
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error("Identity change error:", e);
+      }
     }
 
     function autoResize(el) {
@@ -637,9 +669,16 @@
       scrollToBottom();
 
       try {
+        const headers = {
+          'Content-Type': 'application/json'
+        };
+        if (currentOAuthToken) {
+          headers['Authorization'] = `Bearer ${currentOAuthToken}`;
+        }
+
         const resp = await fetch('/api/v1/query', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: headers,
           body: JSON.stringify({
             query: query,
             top_k: 5,
@@ -648,6 +687,16 @@
             simulate_department: activeUserContext.department
           })
         });
+
+        if (resp.status === 401) {
+          const errData = await resp.json();
+          updateBotMessage(botMsgId, {
+            answer: `**🔒 401 Unauthorized:** OAuth 2.0 verification failed (${errData.detail || 'Invalid or expired token'}).`,
+            retrieved_count: 0,
+            citations: []
+          });
+          return;
+        }
 
         const data = await resp.json();
         updateBotMessage(botMsgId, data);

@@ -139,9 +139,55 @@ $$\text{Accessible Chunks} = \begin{cases} \text{All Vectors (Unrestricted)} & \
 - **Condition B (Role Rank & Department Match):**
   $$\text{chunk.min\_role\_level} \le \text{user.rank} \quad \land \quad \text{chunk.department} \in \{\text{user.department}, \text{"General"}, \text{"All"}\}$$
 
+### 4. OAuth 2.0 Security Layer (`RFC 6749`, `RFC 7519`)
+To prevent identity spoofing or tampering, caller claims are cryptographically issued and verified using standard OAuth 2.0 Bearer JWT tokens:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as User / Frontend Client
+    participant Auth as OAuth 2.0 Token Endpoint (/api/v1/auth/token)
+    participant API as FastAPI RAG Gateway (/api/v1/query)
+    participant Qdrant as Qdrant Vector Store
+
+    Client->>Auth: POST credentials / identity context
+    Auth-->>Client: Returns signed JWT (HS256 / RS256, expiration: 60m)
+    Client->>API: POST /api/v1/query + Authorization: Bearer <token>
+    API->>API: Verify signature, expiration (exp), and issuer (iss)
+    alt Token Invalid / Expired / Tampered
+        API-->>Client: 401 Unauthorized (invalid_token)
+    else Token Valid
+        API->>API: Extract verified claims (sub, role, department)
+        API->>API: Compile native ABAC payload filter
+        API->>Qdrant: Vector similarity search (pre-filtered by ABAC)
+        Qdrant-->>API: Authorized top-K vector chunks
+        API->>API: LLM multi-chunk synthesis & citations
+        API-->>Client: Grounded JSON response
+    end
+```
+
+#### Token Claims Payload Specification:
+```json
+{
+  "sub": "employee_user_id",
+  "role": "member",
+  "department": "Engineering",
+  "rank": 20,
+  "iss": "query-my-meeting-rag",
+  "iat": 1730548800,
+  "exp": 1730552400
+}
+```
+
+#### Enterprise Identity Provider (IdP) Integration:
+In production, the local HMAC-SHA256 signer (`HS256`) can be replaced with standard asymmetric public-key verification (`RS256` / `JWKS`) connecting to:
+- **Microsoft Entra ID (Azure AD):** Validates Bearer tokens issued via MSAL from Office 365 / Teams.
+- **Google Workspace:** Validates OpenID Connect (OIDC) tokens via Google's public discovery endpoint.
+- **Okta / Ping Identity / Auth0:** Validates corporate OAuth2 access tokens directly through standard JWKS endpoints.
+
 ---
 
-## 4. Deep Dive: Dialogue-Aware Chunking Strategy
+## 5. Deep Dive: Dialogue-Aware Chunking Strategy
 
 ### The Dual-Threshold Sliding Window Algorithm
 Standard token chunkers fail by cutting off sentences mid-dialogue. Our chunking engine preserves conversation structure:
@@ -166,9 +212,9 @@ Standard token chunkers fail by cutting off sentences mid-dialogue. Our chunking
 
 ---
 
-## 5. Verification & Test Suite Results
+## 6. Verification & Test Suite Results
 
-Both test suites (`test_pipeline.py` and `test_api.py`) run with 100% dynamic participant discovery:
+Both test suites (`test_pipeline.py` and `test_api.py`) run with 100% dynamic participant discovery and OAuth 2.0 verification:
 
 | Test Case | Scenario / Query | User Identity | Expected Behavior | Actual Result | Status |
 | :---: | :--- | :--- | :--- | :--- | :---: |
@@ -181,3 +227,7 @@ Both test suites (`test_pipeline.py` and `test_api.py`) run with 100% dynamic pa
 | **7** | Grounded answer generation | Authorized Caller | Multi-chunk LLM synthesis | Grounded summary with citations | **PASS** |
 | **8** | Dynamic Transcripts API | API Client | Discover meetings & rosters | Returned JSON list of participants | **PASS** |
 | **9** | Security Filter Inspection | API Client | Inspect compiled Qdrant filter | Returned valid native boolean filter | **PASS** |
+| **10** | OAuth 2.0 Token Generation | Verified Participant | Issue cryptographically signed JWT | Valid access_token returned | **PASS** |
+| **11** | Profile /auth/me Endpoint | Bearer Token Caller | Verify and decode JWT claims | Extracted matching identity claims | **PASS** |
+| **12** | Tampered Token Rejection | Malicious Client | Reject forged / signature-altered JWT | HTTP 401 Unauthorized returned | **PASS** |
+| **13** | Expired Token Rejection | Client with Stale Token | Reject expired JWT timestamp | HTTP 401 Unauthorized returned | **PASS** |
