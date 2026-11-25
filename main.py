@@ -350,31 +350,89 @@ class TranscriptsListResponse(BaseModel):
 
 class LLMSummaryEngine:
     """
-    Production-grade LLM Synthesis Engine.
+    Production-grade LLM Synthesis Engine configured for 100% Free & Open-Source Services.
     Synthesizes a cohesive, grounded summary answer from ALL retrieved context chunks.
-    Supports:
-      - OpenAI API (via OPENAI_API_KEY)
-      - Custom OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, Groq via OPENAI_BASE_URL)
-      - Advanced local multi-chunk synthesis engine with turn-taking extraction.
+    Supports 100% Free Tiers & Local Models:
+      1. Groq Cloud Free Tier (llama-3.3-70b-versatile, llama-3.1-8b-instant via GROQ_API_KEY)
+      2. Google Gemini Free Tier (gemini-1.5-flash, gemini-2.0-flash via GEMINI_API_KEY / GOOGLE_API_KEY)
+      3. Ollama Local Free (llama3.2, mistral, phi3 via USE_OLLAMA=true or OPENAI_BASE_URL)
+      4. Hugging Face Serverless Free Tier (via HF_TOKEN / HUGGINGFACE_API_KEY)
+      5. Built-in Zero-Cost Local Synthesis Engine (Zero setup, zero API keys, 100% offline)
     """
 
     def __init__(self):
         self.client = None
-        self.model_name = os.getenv("LLM_MODEL", "gpt-4o-mini")
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
+        self.provider = "local"
+        self.model_name = "local-grounded-synthesis (Free / Zero-Cost)"
 
-        if api_key or base_url:
+        # 1. Detect Groq Cloud Free Tier (https://console.groq.com/keys)
+        groq_key = os.getenv("GROQ_API_KEY")
+        
+        # 2. Detect Google Gemini Free Tier (https://aistudio.google.com/app/apikey)
+        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        
+        # 3. Detect Hugging Face Free Tier (https://huggingface.co/settings/tokens)
+        hf_key = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_API_KEY")
+
+        # 4. Detect Ollama / Local Open-Source LLM (https://ollama.com/)
+        use_ollama = os.getenv("USE_OLLAMA", "false").lower() == "true"
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+        # 5. Generic OpenAI-compatible custom base URL or key
+        base_url = os.getenv("OPENAI_BASE_URL")
+        openai_key = os.getenv("OPENAI_API_KEY")
+
+        api_key = None
+        target_base_url = None
+        default_model = None
+
+        if groq_key:
+            self.provider = "Groq Cloud (Free Tier)"
+            api_key = groq_key
+            target_base_url = "https://api.groq.com/openai/v1"
+            default_model = "llama-3.3-70b-versatile"
+        elif gemini_key:
+            self.provider = "Google Gemini (Free Tier)"
+            api_key = gemini_key
+            target_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+            default_model = "gemini-1.5-flash"
+        elif use_ollama or (base_url and "11434" in base_url):
+            self.provider = "Ollama (100% Local Free)"
+            api_key = "ollama"
+            target_base_url = base_url or ollama_url
+            default_model = "llama3.2"
+        elif hf_key:
+            self.provider = "Hugging Face (Free Serverless)"
+            api_key = hf_key
+            target_base_url = "https://api-inference.huggingface.co/v1/"
+            default_model = "meta-llama/Llama-3.2-3B-Instruct"
+        elif base_url or openai_key:
+            self.provider = "Custom Endpoint"
+            api_key = openai_key or "local-key-not-required"
+            target_base_url = base_url
+            default_model = "gpt-4o-mini"
+
+        if api_key and (target_base_url or openai_key):
             try:
                 from openai import OpenAI
+                self.model_name = os.getenv("LLM_MODEL", default_model)
                 self.client = OpenAI(
-                    api_key=api_key or "local-key-not-required",
-                    base_url=base_url if base_url else None
+                    api_key=api_key,
+                    base_url=target_base_url
                 )
-                logger.info(f"Initialized LLM client (model={self.model_name}, base_url={base_url or 'default'})")
+                logger.info(
+                    f"Initialized Free LLM Provider '{self.provider}' "
+                    f"(model={self.model_name}, endpoint={target_base_url or 'standard'})"
+                )
             except Exception as e:
-                logger.warning(f"Could not initialize OpenAI client ({e}). Using local synthesis engine.")
+                logger.warning(
+                    f"Could not initialize {self.provider} client ({e}). "
+                    f"Falling back to built-in local synthesis engine."
+                )
                 self.client = None
+                self.model_name = "local-grounded-synthesis (Free / Zero-Cost)"
+        else:
+            logger.info("Using built-in Zero-Cost Local Synthesis Engine (100% Free, no API key required).")
 
     def generate_grounded_answer(
         self,

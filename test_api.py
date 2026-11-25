@@ -13,10 +13,21 @@ Dynamically retrieves meeting rosters from the API to verify:
 """
 
 from datetime import timedelta
+import httpx
 from fastapi.testclient import TestClient
 from main import app, create_access_token
 
-client = TestClient(app)
+def get_test_client():
+    try:
+        r = httpx.get("http://127.0.0.1:8000/health", timeout=1.0)
+        if r.status_code == 200:
+            print("Detected live running server on http://127.0.0.1:8000. Testing against live daemon.")
+            return httpx.Client(base_url="http://127.0.0.1:8000", timeout=10.0)
+    except Exception:
+        pass
+    return TestClient(app)
+
+client = get_test_client()
 
 def test_fastapi_endpoints():
     print("=" * 65)

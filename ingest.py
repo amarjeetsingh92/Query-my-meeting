@@ -94,10 +94,57 @@ class SentenceTransformerEmbedder:
         return self.embed_texts([text])[0]
 
 
+class GeminiEmbedder:
+    """
+    100% Free Cloud Embedding Provider using Google Gemini text-embedding-004.
+    Free tier with 1,500 requests/day, no credit card required:
+    Get free API key at: https://aistudio.google.com/app/apikey
+    """
+    def __init__(self, model_name: str = "text-embedding-004"):
+        from google import genai
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for GeminiEmbedder.")
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
+        self.dimension = 768
+
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        resp = self.client.models.embed_content(
+            model=self.model_name,
+            contents=texts,
+        )
+        return [e.values for e in resp.embeddings]
+
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed_texts([text])[0]
+
+
+class OllamaEmbedder:
+    """
+    100% Free Local Embedding Provider using Ollama (nomic-embed-text / all-minilm).
+    Runs completely offline on local CPU/GPU with 0 cost.
+    Download Ollama at: https://ollama.com/
+    """
+    def __init__(self, model_name: str = "nomic-embed-text", host: str = "http://localhost:11434"):
+        from openai import OpenAI
+        self.client = OpenAI(base_url=f"{host}/v1", api_key="ollama")
+        self.model_name = model_name
+        self.dimension = 768 if "nomic" in model_name else 384
+
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        resp = self.client.embeddings.create(input=texts, model=self.model_name)
+        return [item.embedding for item in resp.data]
+
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed_texts([text])[0]
+
+
 class FallbackDeterministicEmbedder:
     """
     Lightweight, deterministic hash-based pseudo-embedding provider.
-    Used for instant testing and CI environments when heavy weights or API keys are unavailable.
+    100% Free, zero external network calls, zero dependency weights.
+    Used for instant zero-cost testing, local evaluation, and CI environments.
     """
     def __init__(self, dimension: int = 384):
         self.dimension = dimension
@@ -123,21 +170,55 @@ class FallbackDeterministicEmbedder:
 
 
 def get_default_embedder() -> BaseEmbedder:
-    """Auto-selects the best available embedding backend."""
-    if os.getenv("OPENAI_API_KEY"):
-        try:
-            logger.info("Initializing OpenAIEmbedder (text-embedding-3-small)...")
-            return OpenAIEmbedder()
-        except Exception as e:
-            logger.warning(f"Failed to initialize OpenAIEmbedder ({e}), falling back...")
-
+    """
+    Auto-selects the best available 100% FREE embedding backend.
+    
+    Zero-Cost Service Priority:
+      1. Google Gemini Embeddings (Free Tier API: text-embedding-004, 768 dim)
+         -> Activated if GEMINI_API_KEY or GOOGLE_API_KEY is present
+      2. Sentence-Transformers (100% Free Local CPU: all-MiniLM-L6-v2, 384 dim)
+         -> Activated if EMBEDDING_BACKEND=sentence-transformers
+      3. Ollama Local Embeddings (100% Free Local CPU: nomic-embed-text)
+         -> Activated if EMBEDDING_BACKEND=ollama
+      4. FallbackDeterministicEmbedder (100% Free Zero-Cost Instant Hash, 384 dim)
+         -> Default offline zero-dependency mode
+      5. OpenAI (Paid - only if explicitly configured via EMBEDDING_BACKEND=openai)
+    """
     backend = os.getenv("EMBEDDING_BACKEND", "").lower()
+
+    # 1. Free Cloud: Google Gemini text-embedding-004
+    if backend == "gemini" or (backend == "" and (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))):
+        try:
+            logger.info("Initializing 100% Free GeminiEmbedder (text-embedding-004)...")
+            return GeminiEmbedder()
+        except Exception as e:
+            logger.warning(f"Failed to initialize GeminiEmbedder ({e}), falling back...")
+
+    # 2. Free Local: Ollama
+    if backend == "ollama":
+        try:
+            logger.info("Initializing 100% Free OllamaEmbedder (nomic-embed-text)...")
+            return OllamaEmbedder()
+        except Exception as e:
+            logger.warning(f"Failed to initialize OllamaEmbedder ({e}), falling back...")
+
+    # 3. Free Local: Sentence-Transformers
     if backend == "sentence-transformers":
         try:
+            logger.info("Initializing 100% Free local SentenceTransformerEmbedder (all-MiniLM-L6-v2)...")
             return SentenceTransformerEmbedder("all-MiniLM-L6-v2")
         except Exception as e:
             logger.warning(f"SentenceTransformer failed ({e}). Falling back to deterministic.")
 
+    # 4. Explicit OpenAI opt-in (only if user explicitly forces EMBEDDING_BACKEND=openai)
+    if backend == "openai" and os.getenv("OPENAI_API_KEY"):
+        try:
+            return OpenAIEmbedder()
+        except Exception as e:
+            logger.warning(f"OpenAIEmbedder failed ({e}), falling back...")
+
+    # Default: 100% Free, zero-cost, offline deterministic embedder
+    logger.info("Using FallbackDeterministicEmbedder (100% Free / Zero-Cost Offline mode)...")
     return FallbackDeterministicEmbedder(dimension=384)
 
 
