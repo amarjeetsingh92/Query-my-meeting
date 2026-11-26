@@ -32,6 +32,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import jwt
 from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware

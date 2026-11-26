@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
 import numpy as np
+from dotenv import load_dotenv
+load_dotenv()
 
 # Qdrant client
 from qdrant_client import QdrantClient
@@ -261,8 +263,22 @@ class IngestionPipeline:
         self._ensure_payload_indexes()
 
     def _ensure_collection(self) -> None:
-        """Creates the Qdrant collection if it does not already exist."""
+        """Creates the Qdrant collection if it does not already exist, or updates if dimension changed."""
         collections = [c.name for c in self.client.get_collections().collections]
+        if self.collection_name in collections:
+            try:
+                col_info = self.client.get_collection(self.collection_name)
+                existing_size = col_info.config.params.vectors.size
+                if existing_size != self.embedder.dimension:
+                    logger.warning(
+                        f"Existing collection vector size ({existing_size}) does not match "
+                        f"current embedder size ({self.embedder.dimension}). Recreating collection '{self.collection_name}'..."
+                    )
+                    self.client.delete_collection(self.collection_name)
+                    collections.remove(self.collection_name)
+            except Exception as e:
+                logger.debug(f"Could not inspect collection size: {e}")
+
         if self.collection_name not in collections:
             logger.info(
                 f"Creating collection '{self.collection_name}' with vector size {self.embedder.dimension}..."

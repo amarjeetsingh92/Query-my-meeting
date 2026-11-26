@@ -13,3 +13,4 @@ openai>=1.40.0
 python-multipart>=0.0.9
 pyjwt>=2.8.0
 cryptography>=42.0.0
+python-dotenv>=1.0.0
