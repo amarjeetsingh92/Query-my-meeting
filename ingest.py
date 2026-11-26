@@ -98,11 +98,11 @@ class SentenceTransformerEmbedder:
 
 class GeminiEmbedder:
     """
-    100% Free Cloud Embedding Provider using Google Gemini text-embedding-004.
+    100% Free Cloud Embedding Provider using Google Gemini gemini-embedding-001.
     Free tier with 1,500 requests/day, no credit card required:
     Get free API key at: https://aistudio.google.com/app/apikey
     """
-    def __init__(self, model_name: str = "text-embedding-004"):
+    def __init__(self, model_name: str = "gemini-embedding-001"):
         from google import genai
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
@@ -112,11 +112,19 @@ class GeminiEmbedder:
         self.dimension = 768
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        resp = self.client.models.embed_content(
-            model=self.model_name,
-            contents=texts,
-        )
-        return [e.values for e in resp.embeddings]
+        from google.genai import types
+        results: List[List[float]] = []
+        batch_size = 10
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            resp = self.client.models.embed_content(
+                model=self.model_name,
+                contents=batch,
+                config=types.EmbedContentConfig(output_dimensionality=self.dimension)
+            )
+            for e in resp.embeddings:
+                results.append(e.values)
+        return results
 
     def embed_query(self, text: str) -> List[float]:
         return self.embed_texts([text])[0]
@@ -188,10 +196,10 @@ def get_default_embedder() -> BaseEmbedder:
     """
     backend = os.getenv("EMBEDDING_BACKEND", "").lower()
 
-    # 1. Free Cloud: Google Gemini text-embedding-004
+    # 1. Free Cloud: Google Gemini gemini-embedding-001
     if backend == "gemini" or (backend == "" and (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))):
         try:
-            logger.info("Initializing 100% Free GeminiEmbedder (text-embedding-004)...")
+            logger.info("Initializing 100% Free GeminiEmbedder (gemini-embedding-001)...")
             return GeminiEmbedder()
         except Exception as e:
             logger.warning(f"Failed to initialize GeminiEmbedder ({e}), falling back...")
@@ -382,19 +390,65 @@ def main():
 
     args = parser.parse_args()
 
-    pipeline = IngestionPipeline(
-        collection_name=args.collection,
-        qdrant_url=args.qdrant_url,
-        qdrant_api_key=args.qdrant_api_key,
-        qdrant_path=args.qdrant_path
-    )
+    # If running against local Qdrant, check if FastAPI server is already running on port 8000.
+    # If so, delegate ingestion to the server process to avoid Windows portalocker file-locking conflicts!
+    if not args.qdrant_url and args.qdrant_path == DEFAULT_QDRANT_PATH:
+        import urllib.request
+        import json
+        server_active = False
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=1.0) as resp:
+                if resp.status == 200:
+                    server_active = True
+        except Exception:
+            server_active = False
 
-    if args.file:
-        pipeline.ingest_markdown_file(args.file)
-    elif args.dir:
-        pipeline.ingest_directory(args.dir)
-    else:
-        parser.print_help()
+        if server_active:
+            logger.info("Active FastAPI server detected on http://127.0.0.1:8000.")
+            logger.info("Delegating ingestion to server process to prevent Windows single-process file locks...")
+            try:
+                req = urllib.request.Request("http://127.0.0.1:8000/api/v1/ingest/sync", method="POST")
+                with urllib.request.urlopen(req, timeout=60.0) as resp:
+                    result = json.loads(resp.read().decode())
+                    logger.info(f"Ingestion succeeded via server: {result.get('message', result)}")
+                    print(f"\n[SUCCESS] Ingestion completed via running server process:")
+                    print(f" - Converted Docx: {result.get('converted_files_count', 0)}")
+                    print(f" - Active Chunks in Qdrant: {result.get('total_active_chunks', 0)}")
+                    print(f" - Vector Dimension: {result.get('embedder_dimension', 0)}d")
+                    return
+            except Exception as e:
+                logger.warning(f"Server-delegated ingestion failed ({e}). Attempting direct local storage...")
+
+    try:
+        pipeline = IngestionPipeline(
+            collection_name=args.collection,
+            qdrant_url=args.qdrant_url,
+            qdrant_api_key=args.qdrant_api_key,
+            qdrant_path=args.qdrant_path
+        )
+
+        if args.file:
+            pipeline.ingest_markdown_file(args.file)
+        elif args.dir:
+            pipeline.ingest_directory(args.dir)
+        else:
+            parser.print_help()
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "already accessed" in err_msg or "locked" in err_msg or "permission denied" in err_msg:
+            logger.error(
+                "\n" + "=" * 65 + "\n"
+                "QDRANT LOCAL STORAGE FILE-LOCK DETECTED\n"
+                "=" * 65 + "\n"
+                "The storage folder ./qdrant_db is currently locked by a running FastAPI server.\n"
+                "To ingest new transcripts while the server is running:\n"
+                "  1. Click 'Sync Transcripts' in the Chatbot web UI, OR\n"
+                "  2. Run: curl -X POST http://127.0.0.1:8000/api/v1/ingest/sync, OR\n"
+                "  3. Stop the running server before re-running ingest.py.\n"
+                "=" * 65
+            )
+            sys.exit(0)
+        raise
 
 
 if __name__ == "__main__":

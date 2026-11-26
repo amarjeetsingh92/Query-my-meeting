@@ -161,10 +161,19 @@ def test_fastapi_endpoints():
     intern_data = intern_query_resp.json()
     print(f"Retrieved Chunks Count: {intern_data['retrieved_count']}")
     assert intern_data["retrieved_count"] == 0, "SECURITY BREACH: Unauthorized intern retrieved chunks via OAuth token!"
-    print("-> PASSED: ABAC pre-filtering completely blocked unauthorized intern token (0 chunks leaked).")
+    assert intern_data.get("security_status") == "blocked_by_security", "Diagnostic security_status mismatch!"
+    print(f"-> PASSED: ABAC pre-filtering blocked unauthorized intern (security_status='{intern_data['security_status']}').")
+
+    # 10. Automated Transcripts & Vector Ingestion Sync
+    print("\n[API Test 10] Testing In-Process Transcripts & Vector DB Sync (/api/v1/ingest/sync)...")
+    sync_resp = client.post("/api/v1/ingest/sync")
+    assert sync_resp.status_code == 200, f"Sync failed: {sync_resp.text}"
+    sync_data = sync_resp.json()
+    assert sync_data["status"] == "success"
+    print(f"-> PASSED: Ingestion sync verified: {sync_data['message']}")
 
     print("\n" + "=" * 65)
-    print("ALL 9 OAUTH 2.0 & ABAC SECURITY TESTS PASSED WITH 100% SUCCESS!")
+    print("ALL 10 OAUTH 2.0, ABAC & INGESTION TESTS PASSED WITH 100% SUCCESS!")
     print("=" * 65)
 
 if __name__ == "__main__":

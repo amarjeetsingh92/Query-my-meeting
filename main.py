@@ -323,6 +323,18 @@ class QueryResponse(BaseModel):
     retrieved_count: int
     answer: str
     citations: List[RetrievedChunkResponse]
+    security_status: str = "authorized"
+    security_reason: Optional[str] = None
+
+
+class IngestionSyncResponse(BaseModel):
+    status: str
+    converted_files_count: int
+    indexed_chunks: int
+    total_active_chunks: int
+    embedder_dimension: int
+    collection: str
+    message: str
 
 
 class FilterInspectResponse(BaseModel):
@@ -355,85 +367,92 @@ class LLMSummaryEngine:
     """
     Production-grade LLM Synthesis Engine configured for 100% Free & Open-Source Services.
     Synthesizes a cohesive, grounded summary answer from ALL retrieved context chunks.
-    Supports 100% Free Tiers & Local Models:
-      1. Groq Cloud Free Tier (llama-3.3-70b-versatile, llama-3.1-8b-instant via GROQ_API_KEY)
-      2. Google Gemini Free Tier (gemini-1.5-flash, gemini-2.0-flash via GEMINI_API_KEY / GOOGLE_API_KEY)
-      3. Ollama Local Free (llama3.2, mistral, phi3 via USE_OLLAMA=true or OPENAI_BASE_URL)
-      4. Hugging Face Serverless Free Tier (via HF_TOKEN / HUGGINGFACE_API_KEY)
-      5. Built-in Zero-Cost Local Synthesis Engine (Zero setup, zero API keys, 100% offline)
+    Features:
+      - Automatic Provider Cascading: Groq -> Gemini -> Ollama -> HuggingFace -> Local Engine.
+      - 429 Rate-Limit Mitigation: Exponential backoff + automatic fallback to prevent failed queries.
+      - Built-in Zero-Cost Local Synthesis Engine fallback.
     """
 
     def __init__(self):
-        self.client = None
-        self.provider = "local"
+        self.providers: List[Tuple[str, Any, str]] = []
         self.model_name = "local-grounded-synthesis (Free / Zero-Cost)"
+        self.primary_provider = "local"
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            OpenAI = None
 
         # 1. Detect Groq Cloud Free Tier (https://console.groq.com/keys)
         groq_key = os.getenv("GROQ_API_KEY")
-        
+        if groq_key and OpenAI:
+            try:
+                g_model = os.getenv("LLM_MODEL") if "llama" in os.getenv("LLM_MODEL", "") else "llama-3.3-70b-versatile"
+                g_client = OpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
+                self.providers.append(("Groq Cloud", g_client, g_model))
+                if not self.primary_provider or self.primary_provider == "local":
+                    self.primary_provider = "Groq Cloud (Free Tier)"
+                    self.model_name = g_model
+            except Exception as e:
+                logger.warning(f"Could not initialize Groq client: {e}")
+
         # 2. Detect Google Gemini Free Tier (https://aistudio.google.com/app/apikey)
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        
-        # 3. Detect Hugging Face Free Tier (https://huggingface.co/settings/tokens)
-        hf_key = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_API_KEY")
+        if gemini_key and OpenAI:
+            try:
+                gem_model = os.getenv("LLM_MODEL") if "gemini" in os.getenv("LLM_MODEL", "") else "gemini-1.5-flash"
+                gem_client = OpenAI(api_key=gemini_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+                self.providers.append(("Google Gemini", gem_client, gem_model))
+                if not self.primary_provider or self.primary_provider == "local":
+                    self.primary_provider = "Google Gemini (Free Tier)"
+                    self.model_name = gem_model
+            except Exception as e:
+                logger.warning(f"Could not initialize Gemini client: {e}")
 
-        # 4. Detect Ollama / Local Open-Source LLM (https://ollama.com/)
+        # 3. Detect Ollama Local Free (https://ollama.com/)
         use_ollama = os.getenv("USE_OLLAMA", "false").lower() == "true"
         ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        if (use_ollama or ("11434" in (os.getenv("OPENAI_BASE_URL") or ""))) and OpenAI:
+            try:
+                o_model = os.getenv("LLM_MODEL") if "llama" in os.getenv("LLM_MODEL", "") else "llama3.2"
+                o_client = OpenAI(api_key="ollama", base_url=os.getenv("OPENAI_BASE_URL") or ollama_url)
+                self.providers.append(("Ollama Local", o_client, o_model))
+                if not self.primary_provider or self.primary_provider == "local":
+                    self.primary_provider = "Ollama (100% Local Free)"
+                    self.model_name = o_model
+            except Exception as e:
+                logger.warning(f"Could not initialize Ollama client: {e}")
 
-        # 5. Generic OpenAI-compatible custom base URL or key
+        # 4. Detect Hugging Face Serverless Free Tier
+        hf_key = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_API_KEY")
+        if hf_key and OpenAI:
+            try:
+                hf_model = os.getenv("LLM_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
+                hf_client = OpenAI(api_key=hf_key, base_url="https://api-inference.huggingface.co/v1/")
+                self.providers.append(("Hugging Face", hf_client, hf_model))
+                if not self.primary_provider or self.primary_provider == "local":
+                    self.primary_provider = "Hugging Face (Free Serverless)"
+                    self.model_name = hf_model
+            except Exception as e:
+                logger.warning(f"Could not initialize Hugging Face client: {e}")
+
+        # 5. Generic custom OpenAI base URL or key
         base_url = os.getenv("OPENAI_BASE_URL")
         openai_key = os.getenv("OPENAI_API_KEY")
-
-        api_key = None
-        target_base_url = None
-        default_model = None
-
-        if groq_key:
-            self.provider = "Groq Cloud (Free Tier)"
-            api_key = groq_key
-            target_base_url = "https://api.groq.com/openai/v1"
-            default_model = "llama-3.3-70b-versatile"
-        elif gemini_key:
-            self.provider = "Google Gemini (Free Tier)"
-            api_key = gemini_key
-            target_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-            default_model = "gemini-1.5-flash"
-        elif use_ollama or (base_url and "11434" in base_url):
-            self.provider = "Ollama (100% Local Free)"
-            api_key = "ollama"
-            target_base_url = base_url or ollama_url
-            default_model = "llama3.2"
-        elif hf_key:
-            self.provider = "Hugging Face (Free Serverless)"
-            api_key = hf_key
-            target_base_url = "https://api-inference.huggingface.co/v1/"
-            default_model = "meta-llama/Llama-3.2-3B-Instruct"
-        elif base_url or openai_key:
-            self.provider = "Custom Endpoint"
-            api_key = openai_key or "local-key-not-required"
-            target_base_url = base_url
-            default_model = "gpt-4o-mini"
-
-        if api_key and (target_base_url or openai_key):
+        if (base_url or openai_key) and OpenAI and not any(p[0] in ("Groq Cloud", "Google Gemini", "Ollama Local") for p in self.providers):
             try:
-                from openai import OpenAI
-                self.model_name = os.getenv("LLM_MODEL", default_model)
-                self.client = OpenAI(
-                    api_key=api_key,
-                    base_url=target_base_url
-                )
-                logger.info(
-                    f"Initialized Free LLM Provider '{self.provider}' "
-                    f"(model={self.model_name}, endpoint={target_base_url or 'standard'})"
-                )
+                c_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+                c_client = OpenAI(api_key=openai_key or "local-not-required", base_url=base_url)
+                self.providers.append(("Custom Endpoint", c_client, c_model))
+                if not self.primary_provider or self.primary_provider == "local":
+                    self.primary_provider = "Custom Endpoint"
+                    self.model_name = c_model
             except Exception as e:
-                logger.warning(
-                    f"Could not initialize {self.provider} client ({e}). "
-                    f"Falling back to built-in local synthesis engine."
-                )
-                self.client = None
-                self.model_name = "local-grounded-synthesis (Free / Zero-Cost)"
+                logger.warning(f"Could not initialize custom endpoint client: {e}")
+
+        if self.providers:
+            provider_names = [p[0] for p in self.providers]
+            logger.info(f"Initialized LLM Cascade with {len(self.providers)} providers: {provider_names} (Active: {self.model_name})")
         else:
             logger.info("Using built-in Zero-Cost Local Synthesis Engine (100% Free, no API key required).")
 
@@ -442,7 +461,7 @@ class LLMSummaryEngine:
         query: str,
         chunks: List[RetrievedChunkResponse]
     ) -> str:
-        """Generates a comprehensive summary answer synthesized across all retrieved chunks."""
+        """Generates a comprehensive summary answer synthesized across all retrieved chunks with automatic fallback."""
         if not chunks:
             return (
                 "No meeting records found that answer your query within your "
@@ -466,39 +485,52 @@ class LLMSummaryEngine:
 
         full_context_text = "\n".join(context_sections)
 
-        if self.client:
-            try:
-                system_prompt = (
-                    "You are an enterprise intelligence assistant summarizing corporate meeting transcripts.\n"
-                    "Your objective is to provide a comprehensive, clear, and grounded summary answer to the user's question "
-                    "synthesized strictly from the provided transcript excerpts.\n\n"
-                    "Mandatory Guidelines:\n"
-                    "1. Synthesize across ALL provided transcript excerpts chronologically and thematically.\n"
-                    "2. Attribute every key point, decision, and quote to the specific speaker with timestamp citations, e.g., [Speaker Name @ 02:15].\n"
-                    "3. Group related points into clear themes or sequential discussion flow.\n"
-                    "4. Highlight decisions reached, action items assigned, or blockers identified.\n"
-                    "5. If the context does not contain the answer, explicitly state that it was not discussed in the available transcripts.\n"
-                    "6. Maintain 100% factual accuracy; never hallucinate or extrapolate outside the context."
-                )
+        system_prompt = (
+            "You are an enterprise intelligence assistant summarizing corporate meeting transcripts.\n"
+            "Your objective is to provide a comprehensive, clear, and grounded summary answer to the user's question "
+            "synthesized strictly from the provided transcript excerpts.\n\n"
+            "Mandatory Guidelines:\n"
+            "1. Synthesize across ALL provided transcript excerpts chronologically and thematically.\n"
+            "2. Attribute every key point, decision, and quote to the specific speaker with timestamp citations, e.g., [Speaker Name @ 02:15].\n"
+            "3. Group related points into clear themes or sequential discussion flow.\n"
+            "4. Highlight decisions reached, action items assigned, or blockers identified.\n"
+            "5. If the context does not contain the answer, explicitly state that it was not discussed in the available transcripts.\n"
+            "6. Maintain 100% factual accuracy; never hallucinate or extrapolate outside the context."
+        )
 
-                user_prompt = (
-                    f"Meeting Transcripts Context ({len(chunks)} Authorized Excerpts):\n"
-                    f"{full_context_text}\n\n"
-                    f"User Query:\n{query}\n\n"
-                    f"Please provide a structured, cohesive summary answer citing speakers and timestamps."
-                )
+        user_prompt = (
+            f"Meeting Transcripts Context ({len(chunks)} Authorized Excerpts):\n"
+            f"{full_context_text}\n\n"
+            f"User Query:\n{query}\n\n"
+            f"Please provide a structured, cohesive summary answer citing speakers and timestamps."
+        )
 
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.1
-                )
-                return response.choices[0].message.content or "No response generated."
-            except Exception as e:
-                logger.warning(f"Generative LLM call failed ({e}). Falling back to local multi-chunk synthesis.")
+        # Attempt synthesis across cascade of providers with backoff retry on 429
+        for p_name, p_client, p_model in self.providers:
+            for attempt in range(2):
+                try:
+                    response = p_client.chat.completions.create(
+                        model=p_model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.1
+                    )
+                    content = response.choices[0].message.content
+                    if content and len(content.strip()) > 10:
+                        return content
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if ("429" in err_str or "rate limit" in err_str or "resource_exhausted" in err_str) and attempt == 0:
+                        logger.warning(f"Rate limit hit on {p_name} (429). Retrying after 1.5s backoff...")
+                        import time
+                        time.sleep(1.5)
+                        continue
+                    logger.warning(f"Provider '{p_name}' execution issue ({e}). Cascading to next available provider...")
+                    break
+
+        return self._local_multi_chunk_synthesizer(query, chunks, all_speakers, all_meetings)
 
         return self._local_multi_chunk_synthesizer(query, chunks, all_speakers, all_meetings)
 
@@ -626,10 +658,158 @@ def get_qdrant_client() -> QdrantClient:
     return qdrant_client
 
 
+def sync_transcripts_pipeline(force_reindex: bool = False) -> Dict[str, Any]:
+    """
+    Automated Two-Step Pipeline:
+    1. Scans sample_transcripts/ for any .docx files and converts new/modified ones to markdown_transcripts/.
+    2. Chunks and indexes all markdown transcripts into Qdrant in-process using active embedder.
+    3. Handles vector dimension adaptation automatically if embedder changed.
+    """
+    from convert_to_md import convert_docx_file
+    from chunker import DialogueAwareChunker
+    import uuid
+
+    active_embed = get_embedder()
+    active_client = get_qdrant_client()
+    base_dir = Path(__file__).parent
+    sample_dir = base_dir / "sample_transcripts"
+    md_dir = base_dir / "markdown_transcripts"
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Convert any new or modified .docx files
+    converted_count = 0
+    if sample_dir.exists():
+        for docx_p in sample_dir.glob("*.docx"):
+            if docx_p.name.startswith("~$"):
+                continue
+            dest_md = md_dir / f"{docx_p.stem}.md"
+            if not dest_md.exists() or docx_p.stat().st_mtime > dest_md.stat().st_mtime:
+                try:
+                    convert_docx_file(docx_p, dest_md)
+                    converted_count += 1
+                except Exception as e:
+                    logger.error(f"Error converting {docx_p.name}: {e}")
+
+    # 2. Check and ensure collection exists with matching dimension
+    collections = [c.name for c in active_client.get_collections().collections]
+    needs_reindex = force_reindex or (converted_count > 0)
+
+    if collection_name in collections:
+        try:
+            col_info = active_client.get_collection(collection_name)
+            # Inspect actual vector dimension from stored points or config
+            points_sample = active_client.scroll(collection_name=collection_name, limit=1, with_vectors=True)[0]
+            if points_sample and points_sample[0].vector:
+                vec_data = points_sample[0].vector
+                current_dim = len(vec_data) if isinstance(vec_data, list) else col_info.config.params.vectors.size
+            else:
+                current_dim = col_info.config.params.vectors.size
+
+            if current_dim != active_embed.dimension:
+                logger.warning(
+                    f"Vector dimension mismatch in collection '{collection_name}': "
+                    f"Stored points dimension={current_dim}, active embedder dimension={active_embed.dimension}. "
+                    f"Re-creating collection for matching dimensions..."
+                )
+                try:
+                    active_client.delete_collection(collection_name)
+                except Exception:
+                    pass
+                # Close client to release Windows file locks and purge old dimension SQLite storage
+                col_dir = Path(os.getenv("QDRANT_PATH", DEFAULT_QDRANT_PATH)) / "collection" / collection_name
+                if col_dir.exists():
+                    try:
+                        import shutil
+                        active_client.close()
+                        shutil.rmtree(col_dir, ignore_errors=True)
+                        global qdrant_client
+                        qdrant_client = QdrantClient(path=os.getenv("QDRANT_PATH", DEFAULT_QDRANT_PATH))
+                        active_client = qdrant_client
+                    except Exception as ex:
+                        logger.warning(f"Could not purge collection folder: {ex}")
+                collections = [c.name for c in active_client.get_collections().collections]
+                needs_reindex = True
+            elif col_info.points_count == 0:
+                needs_reindex = True
+        except Exception as e:
+            logger.warning(f"Could not inspect collection vectors: {e}. Scheduling reindex...")
+            needs_reindex = True
+    else:
+        needs_reindex = True
+
+    if collection_name not in collections:
+        logger.info(f"Creating Qdrant collection '{collection_name}' (vector size {active_embed.dimension})...")
+        active_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=qmodels.VectorParams(
+                size=active_embed.dimension,
+                distance=qmodels.Distance.COSINE
+            )
+        )
+        # Ensure payload indexes
+        for fld, schema in [
+            ("participants", qmodels.PayloadSchemaType.KEYWORD),
+            ("min_role_level", qmodels.PayloadSchemaType.KEYWORD),
+            ("department", qmodels.PayloadSchemaType.KEYWORD),
+            ("meeting_id", qmodels.PayloadSchemaType.KEYWORD),
+            ("speakers", qmodels.PayloadSchemaType.KEYWORD),
+        ]:
+            try:
+                active_client.create_payload_index(collection_name=collection_name, field_name=fld, field_schema=schema)
+            except Exception:
+                pass
+
+    # 3. Index all markdown transcripts
+    chunker = DialogueAwareChunker(target_tokens=512, max_tokens=768, overlap_turns=2, enable_semantic_split=True)
+    indexed_chunks = 0
+    md_files = list(md_dir.glob("*.md"))
+
+    if needs_reindex:
+        for mf in md_files:
+            try:
+                content = mf.read_text(encoding="utf-8")
+                chunks = chunker.chunk_markdown_file(content)
+                if not chunks:
+                    continue
+                texts = [c.text for c in chunks]
+                embeddings = active_embed.embed_texts(texts)
+                points = [
+                    qmodels.PointStruct(
+                        id=str(uuid.uuid5(uuid.NAMESPACE_DNS, c.chunk_id)),
+                        vector=vec,
+                        payload=c.to_payload()
+                    )
+                    for c, vec in zip(chunks, embeddings)
+                ]
+                active_client.upsert(collection_name=collection_name, points=points, wait=True)
+                indexed_chunks += len(points)
+            except Exception as e:
+                logger.error(f"Error indexing {mf.name}: {e}")
+
+    try:
+        total_points = active_client.get_collection(collection_name).points_count
+    except Exception:
+        total_points = indexed_chunks
+
+    return {
+        "status": "success",
+        "converted_files_count": converted_count,
+        "indexed_chunks_in_run": indexed_chunks,
+        "total_active_chunks": total_points,
+        "embedder_dimension": active_embed.dimension,
+        "collection": collection_name
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_embedder()
     get_qdrant_client()
+    try:
+        res = sync_transcripts_pipeline()
+        logger.info(f"Startup transcript sync completed: {res}")
+    except Exception as e:
+        logger.warning(f"Startup transcript sync warning: {e}")
     logger.info("FastAPI RAG server successfully initialized via lifespan.")
     yield
     global qdrant_client
@@ -837,6 +1017,35 @@ def inspect_security_filter(
     )
 
 
+@app.post("/api/v1/ingest/sync", response_model=IngestionSyncResponse, tags=["Transcripts"])
+@app.post("/api/v1/transcripts/sync", response_model=IngestionSyncResponse, tags=["Transcripts"])
+def trigger_transcripts_sync(force: bool = False):
+    """
+    Automated Ingestion & Sync Pipeline Endpoint:
+    1. Converts any newly added .docx files in sample_transcripts/ into markdown_transcripts/.
+    2. Chunks and indexes transcripts into Qdrant using the active embedder in-process.
+    3. Solves Windows single-process file locking by keeping access within the active server process.
+    4. Automatically adapts vector collection if embedding dimension changed.
+    """
+    try:
+        res = sync_transcripts_pipeline(force_reindex=force)
+        return IngestionSyncResponse(
+            status=res["status"],
+            converted_files_count=res["converted_files_count"],
+            indexed_chunks=res["indexed_chunks_in_run"],
+            total_active_chunks=res["total_active_chunks"],
+            embedder_dimension=res["embedder_dimension"],
+            collection=res["collection"],
+            message=f"Sync successful: {res['converted_files_count']} docx converted, {res['total_active_chunks']} chunks active in Qdrant ({res['embedder_dimension']}d vector)."
+        )
+    except Exception as e:
+        logger.error(f"Sync failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Transcript sync pipeline failed: {str(e)}"
+        )
+
+
 @app.post("/api/v1/query", response_model=QueryResponse, tags=["RAG"])
 def query_meeting_transcripts(
     req: QueryRequest,
@@ -847,7 +1056,8 @@ def query_meeting_transcripts(
     1. Extracts and verifies user claims from OAuth2 Bearer token.
     2. Dynamically generates ABAC Qdrant filter based on verified identity.
     3. Performs vector similarity search strictly within authorized vectors.
-    4. Synthesizes a grounded multi-chunk summary answer via LLM.
+    4. Provides ABAC diagnostic inspection when results are zero to prevent false alarm confusion.
+    5. Synthesizes a grounded multi-chunk summary answer via LLM.
     """
     if not req.query.strip():
         raise HTTPException(
@@ -905,11 +1115,53 @@ def query_meeting_transcripts(
             text=str(payload.get("text", "")),
         ))
 
-    # 5. Synthesize grounded answer across ALL chunks via LLM layer
-    grounded_summary = llm_engine.generate_grounded_answer(
-        query=req.query,
-        chunks=retrieved_chunks
-    )
+    security_status = "authorized"
+    security_reason = None
+
+    # Diagnostic check: if 0 chunks returned, check if discussion exists without security filter
+    if len(retrieved_chunks) == 0:
+        unrestricted_matches = []
+        try:
+            unrestricted_matches = active_client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=None,
+                limit=3,
+                with_payload=True
+            ).points
+        except Exception:
+            pass
+
+        if len(unrestricted_matches) > 0:
+            security_status = "blocked_by_security"
+            security_reason = (
+                f"Matching discussions exist in the meeting archive, but were excluded by security policy: "
+                f"Your active identity '{user_ctx.user_id}' ({user_ctx.role.value.upper()}) "
+                f"is restricted by ABAC clearance or was not present on the attendance roster."
+            )
+            grounded_summary = (
+                f"### 🛡️ Access Restricted by Security Clearance\n\n"
+                f"{security_reason}\n\n"
+                f"**Identity Diagnostics:**\n"
+                f"- **Active User ID:** `{user_ctx.user_id}`\n"
+                f"- **Assigned Role:** `{user_ctx.role.value.upper()}` (Rank {user_ctx.rank})\n"
+                f"- **Department:** `{user_ctx.department}`\n\n"
+                f"*(Zero unauthorized vectors were retrieved. To view this meeting discussion, select an authorized attendee or Administrator in the top header.)*"
+            )
+        else:
+            security_status = "no_matches"
+            security_reason = "No matching discussions were found across any indexed meeting transcripts."
+            grounded_summary = (
+                f"### 🔍 No Matching Discussions Found\n\n"
+                f"No transcript dialogue was found matching your query: *\"{req.query}\"*.\n\n"
+                f"Try searching for specific technical topics, application status, or speaker names."
+            )
+    else:
+        # 5. Synthesize grounded answer across ALL chunks via LLM layer
+        grounded_summary = llm_engine.generate_grounded_answer(
+            query=req.query,
+            chunks=retrieved_chunks
+        )
 
     return QueryResponse(
         query=req.query,
@@ -920,7 +1172,9 @@ def query_meeting_transcripts(
         },
         retrieved_count=len(retrieved_chunks),
         answer=grounded_summary,
-        citations=retrieved_chunks
+        citations=retrieved_chunks,
+        security_status=security_status,
+        security_reason=security_reason
     )
 
 

@@ -100,6 +100,28 @@
       font-size: 11px;
       font-weight: 500;
     }
+    .header-action-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .header-action-btn:hover {
+      background: #30363d;
+      border-color: var(--primary);
+    }
+    .header-action-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
     .identity-select {
       background: transparent;
       border: none;
@@ -462,6 +484,11 @@
         </select>
       </div>
 
+      <!-- Sync Transcripts Action Button -->
+      <button id="sync-btn" class="header-action-btn" onclick="triggerTranscriptSync()" title="Scan sample_transcripts, convert new .docx, and update vector database">
+        <span id="sync-icon">🔄</span> Sync Transcripts
+      </button>
+
       <!-- Security Status Badge -->
       <div id="security-badge" class="status-badge badge-green">
         <span>🔒</span> Authorized
@@ -645,6 +672,43 @@
       sendMessage();
     }
 
+    async function triggerTranscriptSync() {
+      const btn = document.getElementById('sync-btn');
+      const icon = document.getElementById('sync-icon');
+      btn.disabled = true;
+      icon.textContent = '⏳';
+      try {
+        const resp = await fetch('/api/v1/transcripts/sync', { method: 'POST' });
+        const data = await resp.json();
+        icon.textContent = '✅';
+        alert(`Transcripts Synced Successfully!\n\n` +
+              `• Converted Word Documents: ${data.converted_files_count}\n` +
+              `• Active Vector Chunks in Qdrant: ${data.total_active_chunks}\n` +
+              `• Vector Dimension: ${data.embedder_dimension}d\n` +
+              `• Collection: ${data.collection}`);
+        await initChat();
+      } catch (err) {
+        icon.textContent = '❌';
+        alert(`Transcript Sync Failed: ${err.message}`);
+      } finally {
+        setTimeout(() => {
+          icon.textContent = '🔄';
+          btn.disabled = false;
+        }, 2500);
+      }
+    }
+
+    function switchToAdmin() {
+      const dropdown = document.getElementById('identity-dropdown');
+      for (let i = 0; i < dropdown.options.length; i++) {
+        if (dropdown.options[i].value.includes('"admin"')) {
+          dropdown.selectedIndex = i;
+          onIdentityChanged();
+          break;
+        }
+      }
+    }
+
     async function sendMessage() {
       const input = document.getElementById('chat-input');
       const query = input.value.trim();
@@ -676,7 +740,7 @@
           headers['Authorization'] = `Bearer ${currentOAuthToken}`;
         }
 
-        const resp = await fetch('/api/v1/query', {
+        let resp = await fetch('/api/v1/query', {
           method: 'POST',
           headers: headers,
           body: JSON.stringify({
@@ -687,6 +751,26 @@
             simulate_department: activeUserContext.department
           })
         });
+
+        // Problem 7 Fix: Silent automatic token renewal on HTTP 401
+        if (resp.status === 401) {
+          console.warn("OAuth token expired, performing silent auto-refresh...");
+          await refreshOAuthToken();
+          if (currentOAuthToken) {
+            headers['Authorization'] = `Bearer ${currentOAuthToken}`;
+            resp = await fetch('/api/v1/query', {
+              method: 'POST',
+              headers: headers,
+              body: JSON.stringify({
+                query: query,
+                top_k: 5,
+                simulate_user_id: activeUserContext.user_id,
+                simulate_role: activeUserContext.role,
+                simulate_department: activeUserContext.department
+              })
+            });
+          }
+        }
 
         if (resp.status === 401) {
           const errData = await resp.json();
@@ -759,14 +843,20 @@
       let html = '';
 
       if (data.retrieved_count === 0) {
-        html = `
-          <p style="color: #f85149;">
-            <strong>🚫 Access Denied by Security Filter:</strong><br/>
-            No meeting records matched your security clearance (<code>${activeUserContext.role.toUpperCase()}</code>) 
-            or meeting participation roster for <code>${escapeHtml(activeUserContext.user_id)}</code>. 
-            Zero unauthorized vector chunks were returned.
-          </p>
-        `;
+        if (data.security_status === "blocked_by_security") {
+          html = `
+            <div style="border-left: 3px solid #da3633; padding-left: 12px;">
+              ${formatMarkdown(data.answer)}
+              <div style="margin-top: 12px;">
+                <button class="prompt-chip" style="display:inline-flex; width:auto; padding: 6px 14px; font-size:12px;" onclick="switchToAdmin()">
+                  🛡️ Switch to System Administrator to view meeting
+                </button>
+              </div>
+            </div>
+          `;
+        } else {
+          html = formatMarkdown(data.answer || "No matching meeting records found.");
+        }
       } else {
         html = formatMarkdown(data.answer);
 
@@ -861,6 +951,8 @@
     // Initialize on page load
     window.addEventListener('DOMContentLoaded', () => {
       initChat();
+      // Problem 7 Fix: Silent background renewal every 40 minutes (before 60m expiry)
+      setInterval(refreshOAuthToken, 40 * 60 * 1000);
     });
   </script>
 </body>
